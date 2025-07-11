@@ -1,6 +1,6 @@
-# @doyosijs/laravel
+# @doyosi/laravel
 
-[![npm version](https://badge.fury.io/js/%40doyosijs%2Flaravel.svg)](https://badge.fury.io/js/%40doyosijs%2Flaravel)
+[![npm version](https://badge.fury.io/js/%40doyosi%2Flaravel.svg)](https://badge.fury.io/js/%40doyosi%2Flaravel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Complete collection of modern JavaScript plugins designed specifically for Laravel applications. Provides AJAX functionality, form handling, UI components, and interactive features.
@@ -27,7 +27,7 @@ Complete collection of modern JavaScript plugins designed specifically for Larav
 ## 📦 Installation
 
 ```bash
-npm install @doyosijs/laravel
+npm install @doyosi/laravel
 ```
 
 ## 🔧 Quick Start
@@ -39,7 +39,7 @@ import {
     DeleteContent, 
     Toast,
     SelectDropdown 
-} from '@doyosijs/laravel';
+} from '@doyosi/laravel';
 
 // Dynamic content loading
 const grid = new AjaxDivBox({
@@ -245,8 +245,8 @@ MIT © [Karyazilim](https://karyazilim.com)
 
 ## 🤝 Contributing
 
-Contributions welcome! Please read our [contributing guidelines](https://github.com/doyosijs/laravel/blob/main/CONTRIBUTING.md).
+Contributions welcome! Please read our [contributing guidelines](https://github.com/doyosi/laravel/blob/main/CONTRIBUTING.md).
 
 ---
 
-**Happy coding with @doyosijs/laravel! 🚀**
+**Happy coding with @doyosi/laravel! 🚀**

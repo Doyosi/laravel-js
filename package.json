@@ -1,6 +1,7 @@
 {
-  "name": "@doyosijs/laravel",
+  "name": "@doyosi/laravel",
   "version": "1.0.0",
+  "type": "module",
   "description": "Complete JavaScript plugins collection for Laravel applications - AJAX, forms, UI components, and more",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
@@ -16,14 +17,13 @@
   "scripts": {
     "build": "rollup -c",
     "dev": "rollup -c -w",
-    "clean": "rm -rf dist",
+    "clean": "if exist dist rmdir /s /q dist",
+    "clean:unix": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "echo \"No tests yet\" && exit 0",
-    "lint": "echo \"No linting configured\" && exit 0",
-    "docs": "echo \"Generate docs here\" && exit 0"
+    "test": "echo \"No tests yet\" && exit 0"
   },
   "keywords": [
-    "doyosijs",
+    "doyosi",
     "laravel",
     "javascript",
     "plugins",
@@ -54,7 +54,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Doyosi/laravel-js.git"
+    "url": "https://github.com/Doyosi/laravel-js"
   },
   "bugs": {
     "url": "https://github.com/Doyosi/laravel-js/issues"
