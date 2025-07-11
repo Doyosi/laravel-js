@@ -1,0 +1,90 @@
+{
+  "name": "@doyosijs/laravel",
+  "version": "1.0.0",
+  "description": "Complete JavaScript plugins collection for Laravel applications - AJAX, forms, UI components, and more",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "umd:main": "dist/index.umd.js",
+  "types": "types/index.d.ts",
+  "files": [
+    "dist",
+    "types",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "echo \"No tests yet\" && exit 0",
+    "lint": "echo \"No linting configured\" && exit 0",
+    "docs": "echo \"Generate docs here\" && exit 0"
+  },
+  "keywords": [
+    "doyosijs",
+    "laravel",
+    "javascript",
+    "plugins",
+    "ajax",
+    "forms",
+    "ui-components",
+    "form-handling",
+    "delete-confirmation",
+    "dropdown",
+    "multiple-select",
+    "code-input",
+    "edit-form",
+    "pagination",
+    "toast-notifications",
+    "image-upload",
+    "language-switch",
+    "i18n",
+    "frontend",
+    "web-components",
+    "table-ajax",
+    "div-ajax"
+  ],
+  "author": {
+    "name": "Doyosi",
+    "email": "contact@doyosi.com",
+    "url": "https://doyosi.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/doyosijs/laravel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/doyosijs/laravel/issues"
+  },
+  "homepage": "https://github.com/doyosijs/laravel#readme",
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead",
+    "not ie 11"
+  ],
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.9.6"
+  },
+  "peerDependencies": {
+    "axios": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "axios": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
