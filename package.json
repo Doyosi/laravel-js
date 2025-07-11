@@ -54,12 +54,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/doyosijs/laravel.git"
+    "url": "https://github.com/Doyosi/laravel-js.git"
   },
   "bugs": {
-    "url": "https://github.com/doyosijs/laravel/issues"
+    "url": "https://github.com/Doyosi/laravel-js/issues"
   },
-  "homepage": "https://github.com/doyosijs/laravel#readme",
+  "homepage": "https://github.com/Doyosi/laravel-js#readme",
   "engines": {
     "node": ">=14.0.0",
     "npm": ">=6.0.0"
