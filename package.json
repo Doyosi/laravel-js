@@ -1,6 +1,6 @@
 {
   "name": "@doyosi/laravel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Complete JavaScript plugins collection for Laravel applications - AJAX, forms, UI components, and more",
   "main": "dist/index.js",
