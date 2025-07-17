@@ -1,5 +1,5 @@
 /**
- * FormSubmit - Modern async form handler for AJAX-based forms.
+ * FormSubmit - Modern async form handler for AJAX-based forms with lifecycle hooks.
  *
  * Usage:
  *   const form = new FormSubmit({
@@ -10,6 +10,15 @@
  *     successMessage: 'Done!',
  *     errorMessage: 'Failed!',
  *     useToast: true,
+ *     beforeSubmit: (formData, form) => {
+ *       // Modify formData before submission
+ *       formData.append('custom_field', 'value');
+ *       return formData; // Must return formData
+ *     },
+ *     afterSubmit: (response, success) => {
+ *       // Perform actions after submission
+ *       if (success) console.log('Success:', response);
+ *     }
  *   });
  *
  *   form.on('success', res => { ... });
@@ -34,10 +43,13 @@ export default class FormSubmit {
             useToast: typeof Toast !== 'undefined',
             disableOnSuccess: false,
             redirectUrl: null,
+            beforeSubmit: null,             // Function called before form submission
+            afterSubmit: null,              // Function called after form submission (success or error)
+            getUrl: null,                   // Function to get dynamic URL
         }, config);
 
         /** @type {Object.<string, Function[]>} */
-        this.handlers = { success: [], error: [] };
+        this.handlers = { success: [], error: [], beforeSubmit: [], afterSubmit: [] };
 
         // --- Element references ---
         this.form = this._getFormElement(this.config.formSelector);
@@ -59,7 +71,7 @@ export default class FormSubmit {
         this._bindSubmit();
     }
 
-    /** Add event listener (success or error) */
+    /** Add event listener (success, error, beforeSubmit, afterSubmit) */
     on(event, fn) {
         if (this.handlers[event]) this.handlers[event].push(fn);
         return this;
@@ -97,8 +109,16 @@ export default class FormSubmit {
 
     /** Main form submission handler */
     async _handleSubmit() {
-        const formData = new FormData(this.form);
-        const action = this.config.action || this.form.action || window.location.href;
+        let formData = new FormData(this.form);
+
+        // Get action URL - support dynamic URL generation
+        let action;
+        if (this.config.getUrl && typeof this.config.getUrl === 'function') {
+            action = this.config.getUrl(this.submitButton);
+        } else {
+            action = this.config.action || this.form.action || window.location.href;
+        }
+
         const method = this.config.httpMethod.toUpperCase();
 
         // Add _method for Laravel style PUT/PATCH/DELETE
@@ -106,10 +126,32 @@ export default class FormSubmit {
             formData.append('_method', method);
         }
 
+        // --- beforeSubmit hooks ---
+        try {
+            // Call config beforeSubmit if provided
+            if (this.config.beforeSubmit && typeof this.config.beforeSubmit === 'function') {
+                const result = await this.config.beforeSubmit(formData, this.form, this.submitButton);
+                if (result instanceof FormData) {
+                    formData = result;
+                } else if (result === false) {
+                    // Allow beforeSubmit to cancel submission by returning false
+                    return;
+                }
+            }
+
+            // Emit beforeSubmit event
+            this._emit('beforeSubmit', { formData, form: this.form, button: this.submitButton });
+        } catch (error) {
+            console.error('Error in beforeSubmit hook:', error);
+            return;
+        }
+
         this._setLoading(true);
 
+        let response;
+        let success = false;
+
         try {
-            let response;
             if (this.config.method === 'axios' && window.axios) {
                 const axiosConfig = {
                     url: action,
@@ -124,11 +166,26 @@ export default class FormSubmit {
                 response = await this._sendWithFetch(action, formData, this.config.httpMethod);
             }
 
+            success = true;
             await this._handleSuccess(response);
             if (!this.config.disableOnSuccess) this._setLoading(false);
         } catch (error) {
+            response = error;
             await this._handleError(error);
             this._setLoading(false);
+        }
+
+        // --- afterSubmit hooks ---
+        try {
+            // Call config afterSubmit if provided
+            if (this.config.afterSubmit && typeof this.config.afterSubmit === 'function') {
+                await this.config.afterSubmit(response, success, this.form, this.submitButton);
+            }
+
+            // Emit afterSubmit event
+            this._emit('afterSubmit', { response, success, form: this.form, button: this.submitButton });
+        } catch (error) {
+            console.error('Error in afterSubmit hook:', error);
         }
     }
 
@@ -212,7 +269,6 @@ export default class FormSubmit {
                         span.textContent = msgs.join(' ');
                     }
                 } else {
-
                     const span = this.form.querySelector(`.form-error[data-input="${name}"]`);
                     if (span) {
                         span.classList.remove('hidden');
@@ -240,5 +296,36 @@ export default class FormSubmit {
         } else {
             alert(msg);
         }
+    }
+
+    /** Reset form to initial state */
+    reset() {
+        this.form.reset();
+        this._clearErrors();
+        this._setLoading(false);
+    }
+
+    /** Manually trigger form submission */
+    submit() {
+        this._handleSubmit();
+    }
+
+    /** Get current form data */
+    getFormData() {
+        return new FormData(this.form);
+    }
+
+    /** Set form field value */
+    setFieldValue(name, value) {
+        const field = this.form.querySelector(`[name="${name}"]`);
+        if (field) {
+            field.value = value;
+        }
+    }
+
+    /** Get form field value */
+    getFieldValue(name) {
+        const field = this.form.querySelector(`[name="${name}"]`);
+        return field ? field.value : null;
     }
 }
