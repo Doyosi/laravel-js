@@ -5,7 +5,7 @@ const input = 'src/index.js';
 const external = ['axios'];
 
 const banner = `/*!
- * @doyosijs/laravel v1.0.0
+ * @doyosi/laravel-js v1.0.5
  * JavaScript plugins for Laravel applications
  * (c) 2025 Karyazilim
  * Released under MIT License
@@ -33,7 +33,7 @@ export default [
             file: 'dist/index.js',
             format: 'cjs',
             sourcemap: true,
-            exports: 'auto',
+            exports: 'named',
             banner
         },
         plugins: [nodeResolve()]
@@ -51,7 +51,8 @@ export default [
             banner,
             globals: {
                 axios: 'axios'
-            }
+            },
+            exports: 'named'
         },
         plugins: [nodeResolve(), terser()]
     }

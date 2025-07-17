@@ -1,6 +1,6 @@
 {
   "name": "@doyosi/laravel",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "type": "module",
   "description": "Complete JavaScript plugins collection for Laravel applications - AJAX, forms, UI components, and more",
   "main": "dist/index.js",
@@ -54,7 +54,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Doyosi/laravel-js"
+    "url": "git+https://github.com/Doyosi/laravel-js.git"
   },
   "bugs": {
     "url": "https://github.com/Doyosi/laravel-js/issues"

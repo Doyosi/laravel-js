@@ -31,21 +31,22 @@ export default class FormSubmit {
     constructor(config = {}) {
         // --- Default configuration ---
         this.config = Object.assign({
-            method: 'axios',                // 'fetch', 'axios', 'xhr'
-            httpMethod: 'POST',             // HTTP verb for request
-            formSelector: null,             // Selector or element
-            submitButtonSelector: null,     // Selector for submit button
-            action: null,                   // Action URL override
-            successMessage: 'Form submitted successfully!',
-            errorMessage: 'An error occurred while submitting the form.',
+            method: 'axios',
+            httpMethod: 'POST',
+            formSelector: null,
+            submitButtonSelector: null,
+            action: null,
+            successMessage: 'Operation completed successfully!',
+            errorMessage: 'An error occurred.',
             successTitle: 'Success!',
             errorTitle: 'Error!',
             useToast: typeof Toast !== 'undefined',
             disableOnSuccess: false,
             redirectUrl: null,
-            beforeSubmit: null,             // Function called before form submission
-            afterSubmit: null,              // Function called after form submission (success or error)
-            getUrl: null,                   // Function to get dynamic URL
+            beforeSubmit: null,
+            afterSubmit: null,
+            getUrl: null,
+            buttonOnly: false,  // New option for button-only mode
         }, config);
 
         /** @type {Object.<string, Function[]>} */
@@ -53,24 +54,49 @@ export default class FormSubmit {
 
         // --- Element references ---
         this.form = this._getFormElement(this.config.formSelector);
-        if (!this.form) throw new Error('Form element not found.');
         this.submitButton = this._getSubmitButton();
+
+        // Determine if we're in button-only mode
+        this.isButtonOnly = !this.form || this.config.buttonOnly;
+
+        // Only require form if not in button-only mode
+        if (!this.isButtonOnly && !this.form) {
+            throw new Error('Form element not found.');
+        }
+
+        // Require submit button for button-only mode
+        if (this.isButtonOnly && !this.submitButton) {
+            throw new Error('Submit button not found for button-only mode.');
+        }
 
         // --- Button text cache for restoring original ---
         this.originalText = this.submitButton ? this.submitButton.innerHTML : '';
 
-        // --- Button click binds to trigger form submit ---
+        // --- Setup event listeners ---
+        this._setupEventListeners();
+    }
+
+    _setupEventListeners() {
         if (this.submitButton) {
             this.submitButton.addEventListener('click', e => {
                 e.preventDefault();
                 this._clearErrors();
-                this.form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+                if (this.isButtonOnly) {
+                    // For button-only mode, directly handle submission
+                    this._handleSubmit();
+                } else {
+                    // For form mode, trigger form submit event
+                    this.form.dispatchEvent(new Event('submit', { cancelable: true }));
+                }
             });
         }
 
-        this._bindSubmit();
+        // Only bind form submit if we have a form
+        if (this.form && !this.isButtonOnly) {
+            this._bindSubmit();
+        }
     }
-
     /** Add event listener (success, error, beforeSubmit, afterSubmit) */
     on(event, fn) {
         if (this.handlers[event]) this.handlers[event].push(fn);
@@ -91,11 +117,26 @@ export default class FormSubmit {
     }
 
     /** Get the submit button element */
+    /** Get the submit button element */
     _getSubmitButton() {
-        if (!this.form) return null;
-        return this.config.submitButtonSelector
-            ? document.querySelector(this.config.submitButtonSelector)
-            : this.form.querySelector('[type="submit"]');
+        if (!this.config.submitButtonSelector) return null;
+
+        // If it's already a DOM element, return it directly
+        if (this.config.submitButtonSelector instanceof HTMLElement) {
+            return this.config.submitButtonSelector;
+        }
+
+        // If it's a string selector, query for it
+        if (typeof this.config.submitButtonSelector === 'string') {
+            return document.querySelector(this.config.submitButtonSelector);
+        }
+
+        // If we have a form, look for submit button within it
+        if (this.form) {
+            return this.form.querySelector('[type="submit"]');
+        }
+
+        return null;
     }
 
     /** Bind native form submit */
@@ -109,14 +150,36 @@ export default class FormSubmit {
 
     /** Main form submission handler */
     async _handleSubmit() {
-        let formData = new FormData(this.form);
+        let formData;
 
-        // Get action URL - support dynamic URL generation
+        if (this.isButtonOnly) {
+            // For button-only mode, create empty FormData or use custom data
+            formData = new FormData();
+
+            // Add button-specific data if available
+            if (this.submitButton.dataset.data) {
+                try {
+                    const buttonData = JSON.parse(this.submitButton.dataset.data);
+                    Object.entries(buttonData).forEach(([key, value]) => {
+                        formData.append(key, value);
+                    });
+                } catch (e) {
+                    console.warn('Invalid JSON in button data attribute:', e);
+                }
+            }
+        } else {
+            // For form mode, use form data
+            formData = new FormData(this.form);
+        }
+
+        // Get action URL
         let action;
         if (this.config.getUrl && typeof this.config.getUrl === 'function') {
             action = this.config.getUrl(this.submitButton);
         } else {
-            action = this.config.action || this.form.action || window.location.href;
+            action = this.config.action ||
+                (this.form ? this.form.action : null) ||
+                window.location.href;
         }
 
         const method = this.config.httpMethod.toUpperCase();
@@ -128,18 +191,15 @@ export default class FormSubmit {
 
         // --- beforeSubmit hooks ---
         try {
-            // Call config beforeSubmit if provided
             if (this.config.beforeSubmit && typeof this.config.beforeSubmit === 'function') {
                 const result = await this.config.beforeSubmit(formData, this.form, this.submitButton);
                 if (result instanceof FormData) {
                     formData = result;
                 } else if (result === false) {
-                    // Allow beforeSubmit to cancel submission by returning false
                     return;
                 }
             }
 
-            // Emit beforeSubmit event
             this._emit('beforeSubmit', { formData, form: this.form, button: this.submitButton });
         } catch (error) {
             console.error('Error in beforeSubmit hook:', error);
@@ -177,12 +237,10 @@ export default class FormSubmit {
 
         // --- afterSubmit hooks ---
         try {
-            // Call config afterSubmit if provided
             if (this.config.afterSubmit && typeof this.config.afterSubmit === 'function') {
                 await this.config.afterSubmit(response, success, this.form, this.submitButton);
             }
 
-            // Emit afterSubmit event
             this._emit('afterSubmit', { response, success, form: this.form, button: this.submitButton });
         } catch (error) {
             console.error('Error in afterSubmit hook:', error);
@@ -230,8 +288,7 @@ export default class FormSubmit {
             this.submitButton.disabled = false;
             if (buttonText) {
                 // Try to restore last value or dataset, fallback to cache
-                const btnText = buttonText.dataset.default || this._origBtnText;
-                buttonText.textContent = btnText;
+                buttonText.textContent = buttonText.dataset.default || this._origBtnText;
             } else {
                 this.submitButton.textContent = this._origBtnText;
             }
@@ -283,10 +340,13 @@ export default class FormSubmit {
 
     /** Clear validation errors from form */
     _clearErrors() {
-        this.form.querySelectorAll('.form-error[data-input]').forEach(s => {
-            s.classList.add('hidden');
-            s.textContent = '';
-        });
+        // Only clear form errors if we have a form
+        if (this.form) {
+            this.form.querySelectorAll('.form-error[data-input]').forEach(s => {
+                s.classList.add('hidden');
+                s.textContent = '';
+            });
+        }
     }
 
     /** Show toast or alert */
