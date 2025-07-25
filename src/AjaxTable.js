@@ -1,42 +1,47 @@
 export default class AjaxTable {
     constructor({
-                    url,
-                    container,
-                    templateId = 'row-template',
-                    metaKey = 'meta',
-                    dataKey = 'data',
-                    fetcher = window.axios ? 'axios' : 'fetch',
-                    onRow = null,
-                    pagination = null,
-                    filterSelector = null,
-                }) {
+        url,
+        container,
+        templateId = 'row-template',
+        metaKey = 'meta',
+        dataKey = 'data',
+        fetcher = window.axios ? 'axios' : 'fetch',
+        onRow = null,
+        pagination = null,
+        filterSelector = null,
+        loadingIndicator = '.loading-table',
+        nothingFoundBlock = '.nothing-found-table',
+        errorBlock = '.table-render-error',
+        additionalParams = null,
+        autoInit = true,
+        debounceTime = 300
+    }) {
         this.url = url;
-        this.container = typeof container === 'string' ? document.querySelector(container) : container;
-        this.templateId = templateId;
-        this.metaKey = metaKey;
-        this.dataKey = dataKey;
-        this.fetcher = fetcher;
-        this.onRow = onRow;
-        this.table = this.container.querySelector('table');
-        this.table_loader = document.querySelector('.loading-table');
-        this.tbody = this.container.querySelector('tbody');
-        this.pagination = pagination ? (
-            typeof pagination === 'string' ? document.querySelector(pagination) : pagination
-        ) : null;
-        this._handlers = {};
-        this.filterSelector = filterSelector;
+        this.config = { templateId, metaKey, dataKey, fetcher, onRow, additionalParams, debounceTime };
         this.filters = {};
+        this._handlers = {};
+        this.debounceTimer = null;
 
-        // Extra: Nothing found & error blocks
-        this.nothingFoundBlock = document.querySelector('.nothing-found-table');
-        this.errorBlock = document.querySelector('.table-render-error');
-        this.errorText = document.querySelector('.table-render-error-text');
+        const getEl = (sel) => typeof sel === 'string' ? document.querySelector(sel) : sel;
 
-        if (this.filterSelector) {
-            this._bindFilterEvents();
+        this.elements = {
+            container: getEl(container),
+            table: getEl(container)?.querySelector('table'),
+            tbody: getEl(container)?.querySelector('tbody'),
+            pagination: getEl(pagination),
+            filters: getEl(filterSelector),
+            loader: getEl(loadingIndicator),
+            nothingFound: getEl(nothingFoundBlock),
+            error: getEl(errorBlock),
+        };
+
+        if (!this.elements.table || !this.elements.tbody) {
+            throw new Error('AjaxTable: Table or tbody element not found.');
         }
 
-        this.init();
+        this._bindFilterEvents();
+
+        if (autoInit) this.init();
     }
 
     on(event, fn) {
@@ -46,215 +51,184 @@ export default class AjaxTable {
     }
 
     _emit(event, payload) {
-        if (!this._handlers[event]) return;
-        this._handlers[event].forEach(fn => fn(payload));
+        (this._handlers[event] || []).forEach(fn => fn(payload));
     }
 
-    async init(page = 1) {
-        if (!this.table || !this.tbody) {
-            this._showError('Table or tbody element not found in the container.');
-            return;
-        }
-        if (this.filterSelector) {
-            const filterEl = typeof this.filterSelector === 'string'
-                ? document.querySelector(this.filterSelector)
-                : this.filterSelector;
-            if (filterEl) {
-                this._updateFilters(filterEl);
-            }
-        }
-        await this.fetchData(page);
+    init() {
+        if (this.elements.filters) this._updateFilters();
+        return this.fetchData(1);
+    }
+
+    refresh() {
+        const currentPage = this.lastMeta?.current_page || 1;
+        return this.fetchData(currentPage);
     }
 
     _bindFilterEvents() {
-        const filterEl = typeof this.filterSelector === 'string'
-            ? document.querySelector(this.filterSelector)
-            : this.filterSelector;
+        if (!this.elements.filters) return;
 
-        if (!filterEl) return;
-
-        let debounceTimer = null;
-        const debounce = (fn, delay = 300) => {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(fn, delay);
+        const handler = () => {
+            clearTimeout(this.debounceTimer);
+            this.debounceTimer = setTimeout(() => {
+                this._updateFilters();
+                this.fetchData(1);
+            }, this.config.debounceTime);
         };
 
-        filterEl.querySelectorAll('input,select').forEach(input => {
-            if (input.tagName.toLowerCase() !== 'select') {
-                input.addEventListener('input', () => {
-                    if (input.type === "search" || input.type === "text") {
-                        debounce(() => {
-                            this._updateFilters(filterEl);
-                            this.fetchData(1);
-                        });
-                    }
-                });
+        this.elements.filters.querySelectorAll('input, select').forEach(input => {
+            const type = input.tagName.toLowerCase();
+            if (type === 'input') {
+                input.addEventListener('input', handler);
             } else {
-                input.addEventListener('change', () => {
-                    this._updateFilters(filterEl);
-                    this.fetchData(1);
-                });
+                input.addEventListener('change', handler);
             }
         });
     }
 
-
-    _updateFilters(filterEl) {
+    _updateFilters() {
         this.filters = {};
-        filterEl.querySelectorAll('input,select').forEach(input => {
-            if (input.value && input.name) {
-                this.filters[input.name] = input.value;
-            }
-        });
+        const formData = new FormData(this.elements.filters.tagName === 'FORM' ? this.elements.filters : undefined);
+        if (this.elements.filters.tagName !== 'FORM') {
+            this.elements.filters.querySelectorAll('input, select').forEach(input => {
+                if (input.name) formData.append(input.name, input.value);
+            });
+        }
+        for (const [key, value] of formData.entries()) {
+            if (value) this.filters[key] = value;
+        }
     }
 
     _buildQueryString(page = 1) {
         let params = { ...this.filters, page };
-        return Object.entries(params)
-            .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
-            .join('&');
+        if (typeof this.config.additionalParams === 'function') {
+            params = { ...params, ...this.config.additionalParams() };
+        }
+        return new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+    }
+
+    _setState(state, errorMessage = 'An error occurred.') {
+        const { container, loader, nothingFound, error } = this.elements;
+        const all = [container, loader, nothingFound, error];
+        all.forEach(el => el?.classList.add('hidden'));
+
+        if (state === 'loading' && loader) loader.classList.remove('hidden');
+        else if (state === 'content' && container) container.classList.remove('hidden');
+        else if (state === 'empty' && nothingFound) nothingFound.classList.remove('hidden');
+        else if (state === 'error' && error) {
+            error.classList.remove('hidden');
+            const errorTextField = error.querySelector('.table-render-error-text') || error;
+            errorTextField.textContent = errorMessage;
+        }
     }
 
     async fetchData(page = 1) {
-        let paginationEl = this.pagination;
-        if (paginationEl) paginationEl.classList.add('hidden');
-        this._emit("start", { page });
-        this.container.classList.add('hidden');
-        if (this.table_loader) this.table_loader.classList.remove('hidden');
-
-        // Hide error & nothing-found at start
-        this._hideError();
-        this._hideNothingFound();
-
-        let endpoint = this.url.split('?')[0];
-        let query = this._buildQueryString(page);
-        endpoint += query ? ('?' + query) : '';
-
-        let response, rows = [], meta = {};
-        try {
-            if (this.fetcher === 'axios' && window.axios) {
-                response = await axios.get(endpoint);
-                response = response.data;
-            } else {
-                let res = await fetch(endpoint);
-                if (!res.ok) throw await res.json();
-                response = await res.json();
-            }
-            rows = response[this.dataKey] || response.data || [];
-            meta = response[this.metaKey] || {};
-            this._renderRows(rows);
-            this._renderPagination(meta);
-        } catch (err) {
-            let msg = err?.message || (typeof err === 'string' ? err : 'Table Render Error!');
-            this._showError(msg);
-            if (this.table_loader) this.table_loader.classList.add('hidden');
-            this.container.classList.remove('hidden');
-            this._emit("rendered", { rows: [], meta: {}, page, error: msg });
-            return;
+        this._setState('loading');
+        this._emit('start', { page });
+        const pagEl = this.elements.pagination;
+        if (pagEl) {
+            pagEl.innerHTML = '';
+            pagEl.classList.add('hidden');
         }
+        const endpoint = `${this.url.split('?')[0]}?${this._buildQueryString(page)}`;
 
-        if (this.table_loader) this.table_loader.classList.add('hidden');
-        this.container.classList.remove('hidden');
-        this._emit("rendered", { rows, meta, page });
+        try {
+            const response = this.config.fetcher === 'axios'
+                ? (await window.axios.get(endpoint)).data
+                : await (await fetch(endpoint)).json();
 
-        // Show nothing found if table empty
-        if (!rows.length) {
-            this._showNothingFound();
+            const meta = response[this.config.metaKey] || {};
+            this.lastMeta = meta;
+
+            const data = response[this.config.dataKey] || [];
+
+            this._renderRows(data);
+            this._renderPagination(meta);
+
+            this._setState(data.length > 0 ? 'content' : 'empty');
+            this._emit('rendered', { data, meta, page });
+
+        } catch (err) {
+            console.error('AjaxTable fetch error:', err);
+            const msg = err?.message || 'Failed to load data.';
+            this._setState('error', msg);
+            this._emit('error', { error: err, message: msg });
         }
     }
 
-    _renderRows(rows) {
-        this.tbody.innerHTML = '';
-        rows.forEach((row, i) => {
-            let tr = document.createElement('tr');
+    _renderRows(data) {
+        if (!this.elements.tbody) return;
+        this.elements.tbody.innerHTML = '';
+
+        const fragment = document.createDocumentFragment();
+        data.forEach(row => {
+            const tr = document.createElement('tr');
             tr.innerHTML = this._renderTemplate(row);
-            if (tr.children.length === 1 && tr.children[0].tagName === 'TR') {
-                this.tbody.appendChild(tr.children[0]);
-            } else {
-                this.tbody.appendChild(tr);
-            }
+            fragment.appendChild(tr.children.length === 1 && tr.children[0].tagName === 'TR'
+                ? tr.children[0]
+                : tr);
         });
+
+        this.elements.tbody.appendChild(fragment);
     }
 
     _renderTemplate(row) {
-        if (typeof this.onRow === 'function') return this.onRow(row);
-        const tpl = document.getElementById(this.templateId);
+        if (typeof this.config.onRow === 'function') return this.config.onRow(row);
+        if (row.html) return row.html;
+
+        const tpl = document.getElementById(this.config.templateId);
         if (!tpl) return '';
         let html = tpl.innerHTML;
+
+        html = html.replace(/data\.([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)/g, (_, path) => {
+            const keys = path.split('.');
+            let value = row;
+            for (const key of keys) {
+                value = value?.[key];
+                if (value === undefined) break;
+            }
+            return value ?? '';
+        });
+
         html = html.replace(/data\.([a-zA-Z0-9_]+)/g, (_, key) => row[key] ?? '');
         return html;
     }
 
     _renderPagination(meta) {
-        let paginationEl = this.pagination;
-        if (!paginationEl) {
-            paginationEl = document.createElement('div');
-            paginationEl.className = "flex justify-center hidden";
-            this.container.appendChild(paginationEl);
-            this.pagination = paginationEl;
+        const pagEl = this.elements.pagination;
+        if (!pagEl || !meta?.links || meta.last_page <= 1) {
+            pagEl?.classList.add('hidden');
+            return;
         }
-        paginationEl.innerHTML = '';
-        if (!meta || !meta.last_page || meta.last_page <= 1) return;
-        paginationEl.classList.remove('hidden');
-        const joinDiv = document.createElement('div');
-        joinDiv.className = "join";
-        paginationEl.appendChild(joinDiv);
-        meta.links.slice(1, -1).forEach((link, i) => {
-            if (link.label === '...') {
-                const span = document.createElement('span');
-                span.className = 'btn btn-disabled join-item';
-                span.innerHTML = link.label;
-                joinDiv.appendChild(span);
-                return;
-            }
-            let btn = document.createElement('button');
+
+        pagEl.classList.remove('hidden');
+        pagEl.innerHTML = '';
+
+        const fragment = document.createDocumentFragment();
+        meta.links.forEach(link => {
+            const pageNum = new URL(link.url || '', window.location.origin).searchParams.get('page');
+            const btn = document.createElement('button');
+
             btn.className = `join-item btn ${link.active ? 'btn-active' : ''}`;
-            btn.disabled = !link.url;
-            btn.innerHTML = link.label.replace(/&laquo;|&raquo;/g, s => ({
-                '&laquo;': '‹', '&raquo;': '›'
-            })[s] || s);
+            btn.disabled = !link.url || link.active;
+            btn.innerHTML = link.label.replace(/&laquo;|&raquo;/g, '');
+
             if (link.url) {
                 btn.onclick = e => {
                     e.preventDefault();
-                    const url = new URL(link.url, window.location.origin);
-                    const page = url.searchParams.get('page') || 1;
-                    paginationEl.classList.add('hidden');
-                    this._emit("pageChange", { page: parseInt(page), label: link.label });
-                    this.fetchData(page);
+                    this._emit('pageChange', { page: parseInt(pageNum), label: link.label });
+                    this.fetchData(pageNum);
                 };
             }
-            joinDiv.appendChild(btn);
+
+            fragment.appendChild(link.label.includes('...') ? Object.assign(document.createElement('span'), {
+                className: 'btn btn-disabled join-item',
+                textContent: '...'
+            }) : btn);
         });
-    }
 
-    // ===== Extra methods for state blocks =====
-    _showNothingFound() {
-        if (this.nothingFoundBlock) {
-            this.nothingFoundBlock.classList.remove('hidden');
-            this.container.classList.add('hidden');
-        }
-    }
-    _hideNothingFound() {
-        if (this.nothingFoundBlock) {
-            this.nothingFoundBlock.classList.add('hidden');
-        }
-    }
-    _showError(msg) {
-        if (this.errorBlock) {
-            this.errorBlock.classList.remove('hidden');
-            if (this.errorText) this.errorText.textContent = msg;
-        } else {
-            alert(msg);
-        }
-
-        this.container.classList.remove('hidden');
-    }
-    _hideError() {
-        if (this.errorBlock) this.errorBlock.classList.add('hidden');
-        if (this.errorText) this.errorText.textContent = '';
-    }
-
-    refresh() {
-        this.init();
+        const joinDiv = document.createElement('div');
+        joinDiv.className = 'join';
+        joinDiv.appendChild(fragment);
+        pagEl.appendChild(joinDiv);
     }
 }
