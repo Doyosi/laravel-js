@@ -1,28 +1,38 @@
 /**
- * AjaxDivBox - Ajax-based grid/list view with card-like div rendering
+ * AjaxDivBox - Ajax-based grid/list view with card-like div rendering.
  *
- * @param {Object} options
- * @param {string} options.url - API endpoint for data (should return {data, meta})
- * @param {string|Element} options.container - The container to render the boxes into
- * @param {string} options.templateId - The div template id (default: 'box-template')
- * @param {string} options.metaKey - Key for pagination/meta (default: 'meta')
- * @param {string} options.dataKey - Key for rows/boxes (default: 'data')
- * @param {string} options.fetcher - 'axios' or 'fetch' (default: auto)
- * @param {function|null} options.onBox - Custom render function for each box
- * @param {string|Element|null} options.pagination - Pagination container
- * @param {string|Element|null} options.filterSelector - Filters form selector/container
- * @param {function|null} options.additionalParams - Function that returns additional parameters
+ * @param {Object} options - Configuration options.
+ * @see constructor for all available options.
  *
- * Usage:
+ * @example
  * import AjaxDivBox from './AjaxDivBox.js';
  * const grid = new AjaxDivBox({
- *    url: '/api/items',
- *    container: '#ajax-list',
- *    templateId: 'box-template'
+ * url: '/api/items',
+ * container: '#ajax-list',
+ * templateId: 'box-template',
+ * filterSelector: '#filters',
+ * pagination: '#pagination-container'
  * });
- * grid.on('rendered', ({rows}) => console.log('Loaded', rows));
+ * grid.init(); // Fetch initial data
+ * grid.on('rendered', ({ data }) => console.log('Loaded', data.length, 'items'));
  */
 export default class AjaxDivBox {
+    /**
+     * @param {Object} options
+     * @param {string} options.url - API endpoint for data.
+     * @param {string|Element} options.container - The container to render the items into.
+     * @param {string} [options.templateId='box-template'] - The ID of the script template for rendering items.
+     * @param {string} [options.metaKey='meta'] - The key in the API response for pagination metadata.
+     * @param {string} [options.dataKey='data'] - The key in the API response for the array of items.
+     * @param {string} [options.fetcher='axios'|'fetch'] - The HTTP client to use. Auto-detects Axios.
+     * @param {function|null} [options.onBox=null] - A custom function to render an item, overrides templateId.
+     * @param {string|Element|null} [options.pagination=null] - The container for pagination links.
+     * @param {string|Element|null} [options.filterSelector=null] - The form or div containing filter inputs.
+     * @param {string|Element|null} [options.loadingIndicator='.loading-list'] - Selector for the loading element.
+     * @param {string|Element|null} [options.nothingFoundBlock='.nothing-found-list'] - Element to show when no results are found.
+     * @param {string|Element|null} [options.errorBlock='.list-render-error'] - Element to show on fetch error.
+     * @param {function|null} [options.additionalParams=null] - Function that returns an object of extra query parameters.
+     */
     constructor({
                     url,
                     container,
@@ -33,227 +43,256 @@ export default class AjaxDivBox {
                     onBox = null,
                     pagination = null,
                     filterSelector = null,
+                    loadingIndicator = '.loading-list',
                     nothingFoundBlock = '.nothing-found-list',
                     errorBlock = '.list-render-error',
-                    errorText = '.list-render-error-text',
-                    loadingList = '.loading-list',
                     additionalParams = null,
                 }) {
         this.url = url;
-        this.container = typeof container === 'string' ? document.querySelector(container) : container;
-        this.templateId = templateId;
-        this.metaKey = metaKey;
-        this.dataKey = dataKey;
-        this.fetcher = fetcher;
-        this.onBox = onBox;
-        this.additionalParams = additionalParams;
-
-        // The container IS the list container, not a parent of it
-        this.boxList = this.container;
-
-        // Get loading element
-        this.list_loader = document.querySelector(loadingList) || null;
-
-        this.pagination = pagination ? (
-            typeof pagination === 'string' ? document.querySelector(pagination) : pagination
-        ) : null;
-
-        this._handlers = {};
-        this.filterSelector = filterSelector;
+        this.config = { templateId, metaKey, dataKey, fetcher, onBox, additionalParams };
         this.filters = {};
+        this._handlers = {};
+        this.debounceTimer = null;
 
-        // Get status elements
-        this.nothingFoundBlock = document.querySelector(nothingFoundBlock);
-        this.errorBlock = document.querySelector(errorBlock);
-        this.errorText = document.querySelector(errorText);
+        // --- UPDATE: Centralized DOM element querying ---
+        // Query all elements once and store them.
+        const getElement = (selector) => {
+            if (selector instanceof HTMLElement) return selector;
+            if (typeof selector === 'string') return document.querySelector(selector);
+            return null;
+        };
 
-        // Remove the alert - it was for debugging
-        //alert(this.nothingFoundBlock.className);
+        this.elements = {
+            container: getElement(container),
+            pagination: getElement(pagination),
+            filters: getElement(filterSelector),
+            loader: getElement(loadingIndicator),
+            nothingFound: getElement(nothingFoundBlock),
+            error: getElement(errorBlock),
+        };
 
-        if (this.filterSelector) {
-            this._bindFilterEvents();
+        if (!this.elements.container) {
+            throw new Error('AjaxDivBox: The main container element is required and was not found.');
         }
 
-        this.init();
+        // --- UPDATE: Event listeners are bound once in the constructor ---
+        this._bindFilterEvents();
+        if (this.config.autoInit !== false) {
+            this.init();
+        }
     }
 
+    /**
+     * Registers an event handler.
+     * @param {'start'|'rendered'|'error'|'pageChange'} event - The event name.
+     * @param {Function} fn - The callback function.
+     * @returns {this}
+     */
     on(event, fn) {
         if (!this._handlers[event]) this._handlers[event] = [];
         this._handlers[event].push(fn);
         return this;
     }
 
+    /**
+     * Emits an event to all registered handlers.
+     * @private
+     */
     _emit(event, payload) {
-        if (!this._handlers[event]) return;
-        this._handlers[event].forEach(fn => fn(payload));
+        (this._handlers[event] || []).forEach(fn => fn(payload));
     }
 
-    async init(page = 1) {
-        if (!this.container || !this.boxList) {
-            this._showError('List or box container not found.');
-            return;
+    /**
+     * Initializes the component by fetching the first page of data.
+     * This should be called after instantiation.
+     */
+    init() {
+        if (this.elements.filters) {
+            this._updateFilters();
         }
-        if (this.filterSelector) {
-            const filterEl = typeof this.filterSelector === 'string'
-                ? document.querySelector(this.filterSelector)
-                : this.filterSelector;
-            if (filterEl) {
-                this._updateFilters(filterEl);
-            }
-        }
-        await this.fetchData(page);
+        return this.fetchData(1);
     }
 
+    /**
+     * Refreshes the data using the current filters and page.
+     */
+    refresh() {
+        // UPDATE: More descriptive name than init() for a refresh action.
+        const currentPage = this.lastMeta?.current_page || 1;
+        return this.fetchData(currentPage);
+    }
+
+    /**
+     * Binds change/input events to filter elements.
+     * @private
+     */
     _bindFilterEvents() {
-        const filterEl = typeof this.filterSelector === 'string'
-            ? document.querySelector(this.filterSelector)
-            : this.filterSelector;
-        if (!filterEl) return;
+        if (!this.elements.filters) return;
 
-        let debounceTimer = null;
-        const debounce = (fn, delay = 300) => {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(fn, delay);
-        };
-
-        filterEl.querySelectorAll('input,select').forEach(input => {
-            if (input.tagName.toLowerCase() !== 'select') {
-                input.addEventListener('input', () => {
-                    if (input.type === "search" || input.type === "text") {
-                        debounce(() => {
-                            this._updateFilters(filterEl);
-                            this.fetchData(1);
-                        });
-                    }
-                });
-            } else {
-                input.addEventListener('change', () => {
-                    this._updateFilters(filterEl);
+        this.elements.filters.addEventListener('input', e => {
+            const target = e.target;
+            if (target.matches('input, select')) {
+                // UPDATE: Simplified debounce logic.
+                clearTimeout(this.debounceTimer);
+                this.debounceTimer = setTimeout(() => {
+                    this._updateFilters();
                     this.fetchData(1);
-                });
+                }, 300);
             }
         });
     }
 
-    _updateFilters(filterEl) {
+    /**
+     * Reads the current values from the filter inputs.
+     * @private
+     */
+    _updateFilters() {
         this.filters = {};
-        filterEl.querySelectorAll('input,select').forEach(input => {
-            if (input.value && input.name) {
-                this.filters[input.name] = input.value;
-            }
-        });
+        if (!this.elements.filters) return;
+
+        const formData = new FormData(this.elements.filters.tagName === 'FORM' ? this.elements.filters : undefined);
+        if (this.elements.filters.tagName !== 'FORM') {
+            this.elements.filters.querySelectorAll('input, select').forEach(input => {
+                if (input.name) formData.append(input.name, input.value);
+            });
+        }
+
+        for (const [key, value] of formData.entries()) {
+            if (value) this.filters[key] = value;
+        }
     }
 
+    /**
+     * Constructs the query string from current filters and additional params.
+     * @private
+     */
     _buildQueryString(page = 1) {
         let params = { ...this.filters, page };
 
-        // Add additional parameters if provided
-        if (typeof this.additionalParams === 'function') {
-            const additional = this.additionalParams();
-            params = { ...params, ...additional };
+        if (typeof this.config.additionalParams === 'function') {
+            params = { ...params, ...this.config.additionalParams() };
         }
 
-        return Object.entries(params)
-            .filter(([k, v]) => v !== null && v !== undefined && v !== '')
-            .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
-            .join('&');
+        return new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
     }
 
-    async fetchData(page = 1) {
-        let paginationEl = this.pagination;
-        if (paginationEl) paginationEl.classList.add('hidden');
+    /**
+     * Manages the visibility of elements based on the current state.
+     * @private
+     * @param {'loading'|'content'|'error'|'empty'} state - The state to display.
+     * @param {string} [errorMessage] - An optional error message.
+     */
+    _setState(state, errorMessage = 'An error occurred.') {
+        const { container, loader, nothingFound, error } = this.elements;
+        const all = [container, loader, nothingFound, error];
 
+        all.forEach(el => el?.classList.add('hidden'));
+
+        if (state === 'loading' && loader) loader.classList.remove('hidden');
+        else if (state === 'content' && container) container.classList.remove('hidden');
+        else if (state === 'empty' && nothingFound) nothingFound.classList.remove('hidden');
+        else if (state === 'error' && error) {
+            error.classList.remove('hidden');
+            const errorTextField = error.querySelector('.list-render-error-text') || error;
+            errorTextField.textContent = errorMessage;
+        }
+    }
+
+    /**
+     * Fetches data from the API endpoint.
+     * @param {number} [page=1] - The page number to fetch.
+     */
+    async fetchData(page = 1) {
+        this._setState('loading');
         this._emit("start", { page });
 
-        // Hide container and show loading
-        if (this.container) this.container.classList.add('hidden');
-        if (this.list_loader) this.list_loader.classList.remove('hidden');
+        const endpoint = `${this.url.split('?')[0]}?${this._buildQueryString(page)}`;
 
-        this._hideError();
-        this._hideNothingFound();
-
-        let endpoint = this.url.split('?')[0];
-        let query = this._buildQueryString(page);
-        endpoint += query ? ('?' + query) : '';
-
-        let response, rows = [], meta = {};
         try {
-            if (this.fetcher === 'axios' && window.axios) {
-                response = await axios.get(endpoint);
-                response = response.data;
+            const response = this.config.fetcher === 'axios'
+                ? (await window.axios.get(endpoint)).data
+                : await (await fetch(endpoint, { headers: { 'Accept': 'application/json' } })).json();
+
+            if (response.ok === false) throw response; // Handle API-level errors
+
+            const meta = response[this.config.metaKey] || {};
+            this.lastMeta = meta; // Cache for refresh
+
+            // Check for pre-rendered HTML in the response
+            if (response.html !== undefined && response.html !== null) {
+                // If API returns pre-rendered HTML, use it directly
+                this.elements.container.innerHTML = response.html;
+                this._renderPagination(meta);
+
+                const hasContent = response.html.trim().length > 0;
+                this._setState(hasContent ? 'content' : 'empty');
+                this._emit("rendered", { html: response.html, meta, page });
             } else {
-                let res = await fetch(endpoint);
-                if (!res.ok) {
-                    const errorData = await res.json();
-                    throw errorData;
-                }
-                response = await res.json();
+                // Otherwise, use the standard template rendering
+                const data = response[this.config.dataKey] || [];
+                this._renderBoxes(data);
+                this._renderPagination(meta);
+
+                this._setState(data.length > 0 ? 'content' : 'empty');
+                this._emit("rendered", { data, meta, page });
             }
-
-            rows = response[this.dataKey] || response.data || [];
-            meta = response[this.metaKey] || response.meta || {};
-
-            this._renderBoxes(rows);
-            this._renderPagination(meta);
 
         } catch (err) {
             console.error('AjaxDivBox fetch error:', err);
-            let msg = err?.message || (typeof err === 'string' ? err : 'List Render Error!');
-            this._showError(msg);
-
-            if (this.list_loader) this.list_loader.classList.add('hidden');
-            if (this.container) this.container.classList.remove('hidden');
-
-            this._emit("rendered", { rows: [], meta: {}, page, error: msg });
-            this._emit("error", { error: err, message: msg });
-            return;
-        }
-
-        // Hide loading and show container
-        if (this.list_loader) this.list_loader.classList.add('hidden');
-        if (this.container) this.container.classList.remove('hidden');
-
-        this._emit("rendered", { data: rows, meta, page });
-
-        // Show nothing found if no rows
-        if (!rows.length) {
-            this._showNothingFound();
+            const message = err?.message || 'Failed to load data.';
+            this._setState('error', message);
+            this._emit("error", { error: err, message });
         }
     }
 
-    _renderBoxes(rows) {
-        if (!this.boxList) return;
+    /**
+     * Renders the items into the container.
+     * @private
+     */
+    _renderBoxes(data) {
+        if (!this.elements.container) return;
+        this.elements.container.innerHTML = ''; // Clear previous content
 
-        this.boxList.innerHTML = '';
-
-        rows.forEach((row, i) => {
-            let div = document.createElement('div');
-            div.innerHTML = this._renderTemplate(row);
-
-            // If template root is one element, unwrap:
-            if (div.children.length === 1) {
-                this.boxList.appendChild(div.children[0]);
-            } else {
-                this.boxList.appendChild(div);
+        const fragment = document.createDocumentFragment();
+        data.forEach(item => {
+            const itemHtml = this._renderTemplate(item);
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = itemHtml;
+            // Append all children from the temp div to the fragment
+            while (tempDiv.firstChild) {
+                fragment.appendChild(tempDiv.firstChild);
             }
         });
+        this.elements.container.appendChild(fragment);
     }
 
-    _renderTemplate(row) {
-        if (typeof this.onBox === 'function') return this.onBox(row);
+    /**
+     * Renders a single item using either the custom onBox function or the template.
+     * @private
+     */
+    _renderTemplate(item) {
+        // UPDATE: Prioritize per-item HTML if it exists.
+        if (item.html !== undefined && item.html !== null) {
+            return item.html;
+        }
 
-        const tpl = document.getElementById(this.templateId);
+        if (typeof this.config.onBox === 'function') {
+            return this.config.onBox(item);
+        }
+
+        const tpl = document.getElementById(this.config.templateId);
         if (!tpl) {
-            console.error(`Template with id "${this.templateId}" not found`);
+            console.error(`Template with id "${this.config.templateId}" not found.`);
             return '';
         }
+
 
         let html = tpl.innerHTML;
 
         // Replace nested object properties (e.g., data.user.name)
         html = html.replace(/data\.([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)/g, (match, path) => {
             const keys = path.split('.');
-            let value = row;
+            let value = item;
             for (const key of keys) {
                 value = value?.[key];
                 if (value === undefined) break;
@@ -262,109 +301,57 @@ export default class AjaxDivBox {
         });
 
         // Replace simple properties (e.g., data.name)
-        html = html.replace(/data\.([a-zA-Z0-9_]+)/g, (_, key) => row[key] ?? '');
+        html = html.replace(/data\.([a-zA-Z0-9_]+)/g, (_, key) => item[key] ?? '');
 
         return html;
     }
 
+    /**
+     * Renders pagination links based on metadata.
+     * @private
+     */
     _renderPagination(meta) {
-        let paginationEl = this.pagination;
-        if (!paginationEl) {
-            paginationEl = document.createElement('div');
-            paginationEl.className = "flex justify-center hidden";
-            paginationEl.id = 'ajax-pagination';
+        const pagEl = this.elements.pagination;
+        if (!pagEl) return;
 
-            // Insert after the container
-            if (this.container && this.container.parentNode) {
-                this.container.parentNode.insertBefore(paginationEl, this.container.nextSibling);
-            }
-
-            this.pagination = paginationEl;
-        }
-
-        paginationEl.innerHTML = '';
-
-        if (!meta || !meta.last_page || meta.last_page <= 1) {
-            paginationEl.classList.add('hidden');
+        pagEl.innerHTML = '';
+        if (!meta?.links || meta.last_page <= 1) {
+            pagEl.classList.add('hidden');
             return;
         }
 
-        paginationEl.classList.remove('hidden');
+        pagEl.classList.remove('hidden');
+
+        const fragment = document.createDocumentFragment();
+        meta.links.forEach(link => {
+            const pageNum = new URL(link.url || '', window.location.origin).searchParams.get('page');
+
+            if (link.label.includes('...')) {
+                const span = document.createElement('span');
+                span.className = 'btn btn-disabled join-item';
+                span.textContent = '...';
+                fragment.appendChild(span);
+                return;
+            }
+
+            const btn = document.createElement('button');
+            btn.className = `join-item btn ${link.active ? 'btn-active' : ''}`;
+            btn.disabled = !link.url || link.active;
+            btn.innerHTML = link.label.replace(/&laquo;|&raquo;/g, '');
+
+            if (link.url) {
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    this._emit("pageChange", { page: parseInt(pageNum), label: link.label });
+                    this.fetchData(pageNum);
+                };
+            }
+            fragment.appendChild(btn);
+        });
 
         const joinDiv = document.createElement('div');
         joinDiv.className = "join";
-        paginationEl.appendChild(joinDiv);
-
-        if (meta.links && Array.isArray(meta.links)) {
-            meta.links.slice(1, -1).forEach((link, i) => {
-                if (link.label === '...') {
-                    const span = document.createElement('span');
-                    span.className = 'btn btn-disabled join-item';
-                    span.innerHTML = link.label;
-                    joinDiv.appendChild(span);
-                    return;
-                }
-
-                let btn = document.createElement('button');
-                btn.className = `join-item btn ${link.active ? 'btn-active' : ''}`;
-                btn.disabled = !link.url;
-                btn.innerHTML = link.label.replace(/&laquo;|&raquo;/g, s => ({
-                    '&laquo;': '‹', '&raquo;': '›'
-                })[s] || s);
-
-                if (link.url) {
-                    btn.onclick = e => {
-                        e.preventDefault();
-                        const url = new URL(link.url, window.location.origin);
-                        const page = url.searchParams.get('page') || 1;
-                        paginationEl.classList.add('hidden');
-                        this._emit("pageChange", { page: parseInt(page), label: link.label });
-                        this.fetchData(page);
-                    };
-                }
-                joinDiv.appendChild(btn);
-            });
-        }
-    }
-
-    _showNothingFound() {
-        if (this.nothingFoundBlock) {
-            this.nothingFoundBlock.classList.remove('hidden');
-        }
-        if (this.container) {
-            this.container.classList.add('hidden');
-        }
-    }
-
-    _hideNothingFound() {
-        if (this.nothingFoundBlock) {
-            this.nothingFoundBlock.classList.add('hidden');
-        }
-    }
-
-    _showError(msg) {
-        if (this.errorBlock) {
-            this.errorBlock.classList.remove('hidden');
-            if (this.errorText) this.errorText.textContent = msg;
-        } else {
-            console.error('AjaxDivBox Error:', msg);
-        }
-
-        if (this.container) {
-            this.container.classList.add('hidden');
-        }
-    }
-
-    _hideError() {
-        if (this.errorBlock) {
-            this.errorBlock.classList.add('hidden');
-        }
-        if (this.errorText) {
-            this.errorText.textContent = '';
-        }
-    }
-
-    refresh() {
-        this.init();
+        joinDiv.appendChild(fragment);
+        pagEl.appendChild(joinDiv);
     }
 }
